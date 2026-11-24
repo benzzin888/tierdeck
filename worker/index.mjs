@@ -216,8 +216,72 @@ async function publicApi(request, url) {
   return new Response(null, {status:404});
 }
 
+const sharePath = '/api/shares';
+const shareCodePattern = /^[A-Za-z0-9_-]{16}$/;
+const maxShareBytes = 5 * 1024 * 1024;
+
+async function readSnapshot(request) {
+  if (!request.body) throw new Error('empty');
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let text = '', size = 0;
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxShareBytes) {
+      await reader.cancel();
+      throw new RangeError('size');
+    }
+    text += decoder.decode(value,{stream:true});
+  }
+  const board = JSON.parse(text + decoder.decode());
+  if (!board || typeof board.name !== 'string' || board.name.length > 90 || !Array.isArray(board.games)) throw new Error('board');
+  const games = board.games.map(g => {
+    if (!g || !(Number.isSafeInteger(g.id) || (typeof g.id === 'string' && /^(ps:[A-Z0-9_-]{1,64}|xbox:[A-Z0-9]{12})$/.test(g.id))) ||
+        typeof g.name !== 'string' || g.name.length > 250 || !Number.isInteger(g.rank) || g.rank < 0 || g.rank > 10) throw new Error('game');
+    const game = {id:g.id, name:g.name, rank:g.rank};
+    if (g.cover != null) {
+      if (typeof g.cover !== 'string' || g.cover.length > 1500) throw new Error('cover');
+      const cover = new URL(g.cover);
+      if (!['https://image.api.playstation.com','https://store-images.s-microsoft.com'].includes(cover.origin) || cover.username || cover.password) throw new Error('cover');
+      game.cover = cover.href;
+    }
+    return game;
+  });
+  return JSON.stringify({name:board.name, games});
+}
+
+async function shareApi(request, path, bucket) {
+  const headers = {'Access-Control-Allow-Origin':'*','Cache-Control':'no-store'};
+  if (request.method === 'OPTIONS') return new Response(null,{status:204,headers:{
+    ...headers,'Access-Control-Allow-Methods':'GET, POST, OPTIONS','Access-Control-Allow-Headers':'Content-Type'
+  }});
+  try {
+    if (request.method === 'POST' && path === sharePath) {
+      if (!request.headers.get('Content-Type')?.startsWith('application/json')) return new Response(null,{status:415,headers});
+      let snapshot;
+      try { snapshot = await readSnapshot(request); }
+      catch (error) { return new Response(null,{status:error instanceof RangeError ? 413 : 400,headers}); }
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(snapshot)));
+      const code = btoa(String.fromCharCode(...digest.slice(0,12))).replaceAll('+','-').replaceAll('/','_');
+      await bucket.put('shares/'+code+'.json',snapshot);
+      return Response.json({code},{headers});
+    }
+    const code = path.slice(sharePath.length + 1);
+    if (request.method !== 'GET' || !shareCodePattern.test(code)) return new Response(null,{status:404,headers});
+    const snapshot = await bucket.get('shares/'+code+'.json');
+    if (!snapshot) return new Response(null,{status:404,headers});
+    return new Response(snapshot.body,{headers:{...headers,'Content-Type':'application/json','Cache-Control':'public,max-age=86400,immutable'}});
+  } catch {
+    return new Response(null,{status:503,headers});
+  }
+}
+
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
+    const pathName = new URL(request.url).pathname;
+    if (pathName === sharePath || pathName.startsWith(sharePath+'/')) return shareApi(request,pathName,env.BUCKET);
     if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null,{status:405});
     const url = new URL(request.url);
     if (url.pathname.startsWith('/api/')) {
