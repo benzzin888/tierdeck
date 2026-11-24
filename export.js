@@ -1,6 +1,8 @@
 async function loadCover(urls){for(const url of urls){try{const r=await fetch(url,{signal:AbortSignal.timeout(9000)});if(!r.ok)continue;return await createImageBitmap(await r.blob())}catch{}}return null}
 export async function downloadBoard(board,colors,labels,urls){
- const pad=30,width=1120,perRow=10,tileW=88,tileH=120,gap=7,left=154;
+ const pad=30,perRow=10,tileW=88,tileH=120,gap=7,left=154;
+ const gridWidth = perRow * tileW + (perRow - 1) * gap;
+ const width = left + gridWidth + gap + pad;
  const groups=Array.from({length:11},(_,i)=>({rank:10-i,games:board.games.filter(g=>g.rank===10-i)})).filter(g=>g.rank||g.games.length);
  const lineHeight=g=>Math.max(53,Math.ceil(g.games.length/perRow)*(tileH+gap)+10);
  const titleCanvas=document.createElement('canvas'),measure=titleCanvas.getContext('2d');measure.font='bold 36px Arial';
