@@ -10,7 +10,26 @@ const labels=['Провал','Очень плохо','Плохо','Слабо','
 const prefix='tierdeck.board.',activeKey='tierdeck.active',starter=[1245620,1091500,292030,367520,1145360,620,1174180,632470,1086940];
 const featured=await fetch('assets/games/catalog.json').then(r=>r.json());const local=new Map(featured.map(g=>[g.id,g]));
 const fresh=(name='Мой тир-лист игр',seed=false)=>({id:crypto.randomUUID(),name,games:seed?starter.map(id=>({id,name:local.get(id).name,rank:0})):[],updated:Date.now()});
-function parseBoard(data){if(!data||typeof data.name!=='string'||!Array.isArray(data.games))throw Error();const ids=new Set();const board=fresh(data.name.trim().slice(0,90)||'Мой тир-лист игр');for(const g of data.games){if(!Number.isSafeInteger(g.id)||(g.id<1&&!local.has(g.id))||ids.has(g.id)||typeof g.name!=='string'||!Number.isInteger(g.rank)||g.rank<0||g.rank>10)continue;ids.add(g.id);board.games.push({id:g.id,name:g.name.slice(0,250),rank:g.rank})}if(typeof data.id==='string'&&/^[a-f0-9-]{36}$/.test(data.id))board.id=data.id;board.updated=Number(data.updated)||Date.now();return board}
+function storeOf(id) {
+  if (typeof id === 'string' && /^ps:[A-Z0-9_-]{1,64}$/.test(id)) return 'PlayStation';
+  if (typeof id === 'string' && /^xbox:[A-Z0-9]{12}$/.test(id)) return 'Xbox';
+  return '';
+}
+function consoleImage(game) {
+  if (typeof game.cover !== 'string' || game.cover.length > 1500) return null;
+  try {
+    const url = new URL(game.cover);
+    const origin = storeOf(game.id) === 'PlayStation' ? 'https://image.api.playstation.com' : 'https://store-images.s-microsoft.com';
+    if (url.origin === origin && !url.username && !url.password) return url.href;
+  } catch {}
+  return null;
+}
+function boardEntry(game, rank) {
+  const entry = {id:game.id, name:game.name.slice(0,250), rank};
+  if (storeOf(game.id) && !local.has(game.id)) entry.cover = consoleImage(game);
+  return entry;
+}
+function parseBoard(data){if(!data||typeof data.name!=='string'||!Array.isArray(data.games))throw Error();const ids=new Set();const board=fresh(data.name.trim().slice(0,90)||'Мой тир-лист игр');for(const g of data.games){if(!(storeOf(g.id)||(Number.isSafeInteger(g.id)&&(g.id>0||local.has(g.id))))||ids.has(g.id)||typeof g.name!=='string'||!Number.isInteger(g.rank)||g.rank<0||g.rank>10)continue;ids.add(g.id);board.games.push(boardEntry(g,g.rank))}if(typeof data.id==='string'&&/^[a-f0-9-]{36}$/.test(data.id))board.id=data.id;board.updated=Number(data.updated)||Date.now();return board}
 let board,loadedShared=false,brokenShare=false;
 function from64(str){return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(str.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))))}
 if(location.hash.startsWith('#list=')){try{board=parseBoard(from64(location.hash.slice(6)));loadedShared=true}catch{brokenShare=true}history.replaceState(null,'',location.pathname+location.search)}
@@ -20,20 +39,26 @@ function toast(msg){$('#toast').textContent=msg;$('#toast').classList.add('on');
 function save(){board.updated=Date.now();try{localStorage.setItem(prefix+board.id,JSON.stringify(board));localStorage.setItem(activeKey,board.id);$('#status span').textContent='Сохранено'}catch{$('#status span').textContent='Не сохранено';toast('Хранилище браузера недоступно. Сохраните ссылку на список.')}render()}
 function plural(n,one,few,many){return n+' '+(n%10===1&&n%100!==11?one:n%10>=2&&n%10<=4&&(n%100<12||n%100>14)?few:many)}
 function gamesCount(n){return plural(n,'игра','игры','игр')}
-const steamApiOrigin = location.hostname.endsWith('.github.io')
+const apiOrigin = location.hostname.endsWith('.github.io')
   ? 'https://tierdeck-games.aromaticeagle16.chatgpt.site'
   : location.origin;
 const remoteCovers = new Map();
-function urls(id) {
+function urls(id, game) {
   const localGame = local.get(id);
   const file = localGame && 'assets/games/' + localGame.file;
+  const store = storeOf(id);
+  if (store) {
+    const src = consoleImage(game);
+    const url = src && (store === 'PlayStation' ? apiOrigin + '/api/ps-cover?src=' + encodeURIComponent(src) : src);
+    return [file, url].filter(Boolean);
+  }
   if (id < 1) return file ? [file] : [];
   const base = 'https://cdn.akamai.steamstatic.com/steam/apps/' + id + '/';
-  return [...new Set([remoteCovers.get(id), localGame?.hd, steamApiOrigin + '/api/cover/' + id, file,
+  return [...new Set([remoteCovers.get(id), localGame?.hd, apiOrigin + '/api/cover/' + id, file,
     base + 'library_600x900_2x.jpg', base + 'library_600x900.jpg', base + 'header.jpg',
     base + 'capsule_231x87.jpg'].filter(Boolean))];
 }
-function cover(g,cls=''){const im=el('img',cls);im.alt=g.name;im.draggable=false;im.crossOrigin='anonymous';const options=urls(g.id);let i=0;im.onerror=()=>{if(++i<options.length)im.src=options[i];else{const alt=el('span','fallback',g.name);im.replaceWith(alt)}};im.src=options[0];return im}
+function cover(g,cls=''){const im=el('img',cls);im.alt=g.name;im.draggable=false;im.crossOrigin='anonymous';const options=urls(g.id,g);let i=0;im.onerror=()=>{if(++i<options.length)im.src=options[i];else{const alt=el('span','fallback',g.name);im.replaceWith(alt)}};if(!options.length)return el('span','fallback',g.name);im.src=options[0];return im}
 function show(title){$('#dialogtitle').textContent=title;body.replaceChildren();if(!modal.open)modal.showModal()}
 $('#close').onclick=()=>modal.close();modal.onclick=e=>{if(e.target===modal){const r=modal.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)modal.close()}};
 function move(id,rank,before){const idx=board.games.findIndex(g=>g.id===id);if(idx<0||id===before)return;const [g]=board.games.splice(idx,1);g.rank=rank;const dest=board.games.findIndex(g=>g.id===before);board.games.splice(dest<0?board.games.length:dest,0,g);save()}
@@ -58,12 +83,16 @@ function sizeRatedCovers() {
 }
 new ResizeObserver(sizeRatedCovers).observe(shelfGrid);
 sizeRatedCovers();
+function cardId(card) {
+  const id = card?.dataset.id;
+  return storeOf(id) ? id : Number(id);
+}
 let dragId=null;
-document.addEventListener('dragstart',e=>{const c=e.target.closest('[data-id]');if(!c)return;dragId=+c.dataset.id;e.dataTransfer.setData('text/plain',c.dataset.id);e.dataTransfer.effectAllowed='move';c.classList.add('dragging')});
+document.addEventListener('dragstart',e=>{const c=e.target.closest('[data-id]');if(!c)return;dragId=cardId(c);e.dataTransfer.setData('text/plain',c.dataset.id);e.dataTransfer.effectAllowed='move';c.classList.add('dragging')});
 function clearDrag(){document.querySelectorAll('.dragover,.dragging,.focusdrop').forEach(n=>n.classList.remove('dragover','dragging','focusdrop'));dragId=null}
-document.addEventListener('dragover',e=>{const zone=e.target.closest('[data-zone]');if(!zone||dragId===null)return;e.preventDefault();e.dataTransfer.dropEffect='move';document.querySelectorAll('.dragover,.focusdrop').forEach(n=>n.classList.remove('dragover','focusdrop'));zone.classList.add('dragover');const c=e.target.closest('[data-id]');if(c&&+c.dataset.id!==dragId)c.classList.add('focusdrop')});
+document.addEventListener('dragover',e=>{const zone=e.target.closest('[data-zone]');if(!zone||dragId===null)return;e.preventDefault();e.dataTransfer.dropEffect='move';document.querySelectorAll('.dragover,.focusdrop').forEach(n=>n.classList.remove('dragover','focusdrop'));zone.classList.add('dragover');const c=e.target.closest('[data-id]');if(c&&cardId(c)!==dragId)c.classList.add('focusdrop')});
 document.addEventListener('dragleave',e=>{const z=e.target.closest('[data-zone]');if(z&&!z.contains(e.relatedTarget))z.classList.remove('dragover')});document.addEventListener('dragend',clearDrag);
-document.addEventListener('drop',e=>{const z=e.target.closest('[data-zone]');if(!z||dragId===null)return;e.preventDefault();move(dragId,+z.dataset.zone,Number(e.target.closest('[data-id]')?.dataset.id));clearDrag()});
+document.addEventListener('drop',e=>{const z=e.target.closest('[data-zone]');if(!z||dragId===null)return;e.preventDefault();move(dragId,+z.dataset.zone,cardId(e.target.closest('[data-id]')));clearDrag()});
 const normalize = s => s.normalize('NFKD').toLowerCase()
   .replace(/[\u0300-\u036f’'™®]/g,'').replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 const aliases = {
@@ -72,6 +101,7 @@ const aliases = {
   632470:['диско элизиум'],1086940:['балдурс гейт 3','bg3'],
   2638890:['анимуша','онимуша','онимуся','анимуша путь меча','онимуша путь меча'],
   4115450:['фантом блейд зиро','фантом блэйд зиро','фантом блейд зеро','phantom blade 0'],
+  'ps:UP9000-PPSA03671_00-MARVELSWOLVERINE':['marvel wolverine','wolverine','росомаха','марвел росомаха'],
   '-6':['гта 6','гта6','гта vi','gta6','gta 6','gta vi','grand theft auto 6','grand theft auto vi']
 };
 for (const id of Object.keys(aliases)) aliases[id] = aliases[id].map(normalize);
@@ -95,7 +125,7 @@ function hideResults(){
 function addGame(g){
   if(!g)return;
   const exists=board.games.some(x=>x.id===g.id);
-  if(!exists){board.games.push({id:g.id,name:g.name,rank:0});save()}
+  if(!exists){board.games.push(boardEntry(g,0));save()}
   search.value='';hideResults();toast(exists?'Эта игра уже в тир-листе':g.name+' — добавлено на полку');search.focus();
 }
 function localWeight(g,q) {
@@ -112,17 +142,20 @@ function suggest(){
   const previous=picked?hits[selection]?.id:null;
   const ranked=[];
   for(const g of index){const score=localWeight(g,q);if(Number.isFinite(score))ranked.push({g,score})}
-  games.forEach((g,i)=>{
+  [...games, ...current.consoleGames].forEach((g,i,all)=>{
     const score=localWeight(g,q);
-    ranked.push({g,score:score===0?0:1 + i / (games.length + 1)});
+    ranked.push({g,score:score===0?0:1 + i / (all.length + 1)});
   });
-  ranked.sort((a,b)=>a.score-b.score||Number(!!b.g.featured)-Number(!!a.g.featured)||a.g.name.length-b.g.name.length||a.g.id-b.g.id);
+  ranked.sort((a,b)=>a.score-b.score||Number(!!b.g.featured)-Number(!!a.g.featured)||a.g.name.length-b.g.name.length||String(a.g.id).localeCompare(String(b.g.id)));
   const seen=new Set();hits=[];let hiddenMatches=false;
   for(const {g} of ranked){if(seen.has(g.id))continue;if(hits.length===current.limit){hiddenMatches=true;break}seen.add(g.id);hits.push(g)}
   selection=Math.max(0,hits.findIndex(g=>g.id===previous));results.replaceChildren();
   for(const [i,g] of hits.entries()){
     const b=btn('','result',()=>addGame(g),'game');b.id='result-'+i;b.setAttribute('role','option');b.tabIndex=-1;
-    b.append(el('span','',g.name));b.insertAdjacentHTML('beforeend',icon(board.games.some(x=>x.id===g.id)?'check':'plus'));
+    b.append(el('span','',g.name));
+    const storeLabel = storeOf(g.id) || (g.id > 0 ? 'Steam' : '');
+    if (storeLabel) b.append(el('small','store-label',storeLabel));
+    b.insertAdjacentHTML('beforeend',icon(board.games.some(x=>x.id===g.id)?'check':'plus'));
     b.onmousedown=e=>e.preventDefault();results.append(b);
   }
   if(state!=='loading' && (full || searchError) && (current.next!==null || hiddenMatches)){
@@ -143,9 +176,10 @@ function suggest(){
     more.disabled=job.loadingMore;more.onmousedown=e=>e.preventDefault();
     results.append(more);
   }
+  if (current.unavailable.length) results.append(el('div','searchmsg','Временно недоступен поиск: '+current.unavailable.join(', ')+'.'));
   if(!hits.length||state==='error'){
-    const msg=state==='error'?'Steam пока не отвечает. Доступен поиск по сохранённому каталогу.':
-      state==='loading'?'Ищем в Steam…':!full&&!searchError?'Загружаем каталог…':
+    const msg=state==='error'?'Steam пока не отвечает. Показаны доступные результаты.':
+      state==='loading'||current.pendingStores?'Ищем в магазинах…':!full&&!searchError?'Загружаем каталог…':
       searchError?'Не удалось загрузить сохранённый каталог. Повторите поиск.':'Совпадений не найдено. Попробуйте другое название.';
     results.append(el('div','searchmsg',msg));
   }
@@ -158,7 +192,7 @@ function highlight(){
 async function loadPage(job, offset) {
   try {
     const params=new URLSearchParams({q:job.term,start:String(offset)});
-    const response=await fetch(steamApiOrigin + '/api/store-search?'+params,{signal:job.controller.signal});
+    const response=await fetch(apiOrigin + '/api/store-search?'+params,{signal:job.controller.signal});
     if(!response.ok)throw Error();
     const page=await response.json();
     if(current!==job)return;
@@ -171,10 +205,34 @@ async function loadPage(job, offset) {
     }
   }catch{if(current===job&&!job.controller.signal.aborted)job.state='error'}
 }
-async function loadLive(job){
-  if(job.task)return job.task;
-  if(job.state!=='loading')return;
-  job.task=loadPage(job,0).finally(()=>{if(current===job)suggest()});
+const consoleCache = new Map();
+async function loadConsole(job, store) {
+  const key = store + ':' + job.cacheKey;
+  try {
+    let cached = consoleCache.get(key);
+    if (!cached || Date.now() - cached.at >= 300000) {
+      const params = new URLSearchParams({store, q:job.term});
+      const response = await fetch(apiOrigin + '/api/console-search?' + params, {signal:job.controller.signal});
+      if (!response.ok) throw Error();
+      const games = await response.json();
+      cached = {at:Date.now(), games:games.map(g => ({...g,key:normalize(g.name)}))};
+      consoleCache.set(key, cached);
+      if (consoleCache.size > 200) consoleCache.delete(consoleCache.keys().next().value);
+    }
+    job.consoleGames.push(...cached.games);
+  } catch {
+    if (!job.controller.signal.aborted) job.unavailable.push(store === 'ps' ? 'PlayStation' : 'Xbox');
+  } finally {
+    job.pendingStores--;
+    if (current === job) suggest();
+  }
+}
+function loadLive(job) {
+  if (!job.task) {
+    const steam = job.state === 'loading' ? loadPage(job,0).finally(() => { if (current === job) suggest(); }) : null;
+    const stores = job.pendingStores ? [loadConsole(job,'ps'),loadConsole(job,'xbox')] : [];
+    job.task = Promise.all([steam,...stores]);
+  }
   return job.task;
 }
 function startSearch(){
@@ -184,9 +242,10 @@ function startSearch(){
   const cacheKey=term.normalize('NFC').toLowerCase();
   const cached=liveCache.get(cacheKey);const fresh=cached&&Date.now()-cached.at<300000;
   openSearch=true;
-  const job=current={q,term,cacheKey,controller:new AbortController(),games:fresh?[...cached.games]:[],next:fresh?cached.next:null,limit:25,loadingMore:false,state:fresh?'ready':'loading'};
+  const lookUpConsoles = term.length >= 2 && term.length <= 160 && !/^\d+$|^(?:https?:\/\/)?store\.steampowered\.com\//i.test(term);
+  const job=current={q,term,cacheKey,consoleGames:[],unavailable:[],pendingStores:lookUpConsoles?2:0,controller:new AbortController(),games:fresh?[...cached.games]:[],next:fresh?cached.next:null,limit:25,loadingMore:false,state:fresh?'ready':'loading'};
   prepare();suggest();
-  if(job.state==='loading')timer=setTimeout(()=>loadLive(job),260);
+  if(job.state==='loading'||job.pendingStores)timer=setTimeout(()=>loadLive(job),260);
 }
 search.onfocus=()=>{prepare();startSearch()};search.oninput=startSearch;
 $('#searchform').onsubmit=async e=>{
@@ -232,4 +291,4 @@ $('#share').onclick=()=>{const bytes=new TextEncoder().encode(JSON.stringify({na
 save();
 if (document.activeElement === search && search.value.trim()) startSearch();
 if(loadedShared)toast('Копия тир-листа сохранена в этом браузере');if(brokenShare)toast('Не удалось прочитать ссылку на тир-лист');
-$('#png').onclick=async()=>{const b=$('#png'),original=b.innerHTML;b.disabled=true;b.textContent='Создаём PNG…';const snap=structuredClone(board);try{const {downloadBoard}=await import('./export.js');const missing=await downloadBoard(snap,colors,labels,urls);toast(missing?'PNG готов. Для недоступных обложек указаны названия.':'PNG готов к скачиванию')}catch{toast('Не удалось создать PNG. Попробуйте ещё раз.')}finally{b.disabled=false;b.innerHTML=original}};
+$('#png').onclick=async()=>{const b=$('#png'),original=b.innerHTML;b.disabled=true;b.textContent='Создаём PNG…';const snap=structuredClone(board);try{const {downloadBoard}=await import('./export.js?v=multistore1');const missing=await downloadBoard(snap,colors,labels,urls);toast(missing?'PNG готов. Для недоступных обложек указаны названия.':'PNG готов к скачиванию')}catch{toast('Не удалось создать PNG. Попробуйте ещё раз.')}finally{b.disabled=false;b.innerHTML=original}};

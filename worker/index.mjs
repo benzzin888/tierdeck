@@ -106,8 +106,98 @@ async function gameCover(appid) {
   return new Response(null, {status:302, headers:{Location:url,'Cache-Control':'public, max-age=86400'}});
 }
 
+const psSearchOperation = '4df6284f982e57bec70f23c77e2c219dc792eb19af7fb3d3a81767aa3f1958aa';
+const psGameTypes = new Set(['FULL_GAME', 'PREMIUM_EDITION', 'GAME_BUNDLE', 'BUNDLE', 'DEMO']);
+const posterRoles = ['PORTRAIT_BANNER', 'EDITION_KEY_ART', 'MASTER', 'GAMEHUB_COVER_ART'];
+
+async function storeJson(url, headers = {}) {
+  const response = await fetch(url, {
+    headers, signal: AbortSignal.timeout(6000),
+    cf: {cacheEverything:true, cacheTtlByStatus:{'200-299':300,'400-599':0}}
+  });
+  if (!response.ok) throw Error('Store unavailable');
+  return response.json();
+}
+
+function psImage(value) {
+  if (typeof value !== 'string' || value.length > 1500) return null;
+  try {
+    const url = new URL(value);
+    if (url.origin === 'https://image.api.playstation.com' && !url.username && !url.password &&
+        /^\/(vulcan|gs2)\//.test(url.pathname)) return url;
+  } catch {}
+  return null;
+}
+
+async function playStationSearch(term) {
+  const url = new URL('https://web.np.playstation.com/api/graphql/v1//op');
+  url.search = new URLSearchParams({
+    operationName:'getSearchResults',
+    variables:JSON.stringify({countryCode:'US', languageCode:'en', nextCursor:'', pageOffset:0, pageSize:24, searchTerm:term}),
+    extensions:JSON.stringify({persistedQuery:{version:1, sha256Hash:psSearchOperation}})
+  });
+  const {data} = await storeJson(url, {'Content-Type':'application/json'});
+  return data.universalSearch.results.flatMap(item => {
+    if (item.__typename !== 'Concept' && !psGameTypes.has(item.storeDisplayClassification)) return [];
+    const media = (item.media || []).filter(m => m.type === 'IMAGE' && psImage(m.url));
+    const poster = posterRoles.map(role => media.find(m => m.role === role)).find(Boolean);
+    if (!poster || !item.name || !/^[A-Z0-9_-]{1,64}$/i.test(item.id)) return [];
+    return [{id:'ps:'+item.id, name:item.name, cover:poster.url}];
+  });
+}
+
+async function xboxSearch(term) {
+  const url = new URL('https://www.microsoft.com/msstoreapiprod/api/autosuggest');
+  url.search = new URLSearchParams({
+    market:'en-us',clientId:'7F27B536-CF6B-4C65-8638-A0F8CB6DFC6E',
+    sources:'dcatall-products',counts:'15',query:term
+  });
+  const data = await storeJson(url);
+  const ids = data.ResultSets.flatMap(set => set.Suggests || [])
+    .filter(item => item.Source === 'Game')
+    .map(item => item.Metas?.find(m => m.Key === 'BigCatalogId')?.Value)
+    .filter(id => /^[A-Z0-9]{12}$/.test(id));
+  if (!ids.length) return [];
+  const details = new URL('https://displaycatalog.mp.microsoft.com/v7.0/products');
+  details.search = new URLSearchParams({bigIds:[...new Set(ids)].join(','), market:'US', languages:'en-US'});
+  const {Products} = await storeJson(details);
+  return Products.flatMap(product => {
+    const xbox = product.DisplaySkuAvailabilities?.some(sku => sku.Availabilities?.some(
+      a => a.Conditions?.ClientConditions?.AllowedPlatforms?.some(p => /Xbox/i.test(p.PlatformName))));
+    const info = product.LocalizedProperties?.[0];
+    if (!xbox || product.ProductKind !== 'Game' || !info?.ProductTitle) return [];
+    const images = info.Images || [];
+    const image = ['Poster','BrandedKeyArt','BoxArt','Logo'].map(role => images.find(i => i.ImagePurpose === role)).find(Boolean);
+    if (!image?.Uri) return [];
+    const poster = new URL(image.Uri, 'https://store-images.s-microsoft.com');
+    if (poster.origin !== 'https://store-images.s-microsoft.com') return [];
+    poster.search = 'w=720';
+    return [{id:'xbox:'+product.ProductId, name:info.ProductTitle, cover:poster.href}];
+  });
+}
+
+async function consoleSearch(url) {
+  const term = (url.searchParams.get('q') || '').trim();
+  const store = url.searchParams.get('store');
+  if (!term || term.length > 160 || !['ps','xbox'].includes(store)) return Response.json([], {status:400});
+  const games = store === 'ps' ? await playStationSearch(term) : await xboxSearch(term);
+  return Response.json(games, {headers:cacheHeaders});
+}
+
+async function playStationCover(url) {
+  const image = psImage(url.searchParams.get('src'));
+  if (!image) return new Response(null, {status:400});
+  image.search = 'w=720';
+  const response = await fetch(image, {redirect:'error', signal:AbortSignal.timeout(7000), cf:{cacheEverything:true,cacheTtl:86400}});
+  const type = response.headers.get('Content-Type') || '';
+  if (!response.ok || !/^image\/(?:jpeg|png|webp|avif)(?:;|$)/i.test(type)) return new Response(null,{status:404});
+  return new Response(response.body, {headers:{'Content-Type':type,'Cache-Control':'public,max-age=86400'}});
+}
+
 async function publicApi(request, url) {
   try {
+    if (url.pathname === '/api/console-search') return await consoleSearch(url);
+    if (url.pathname === '/api/ps-cover') return await playStationCover(url);
     if (url.pathname === '/api/store-search') {
       const term = (url.searchParams.get('q') || '').trim();
       if (!term || term.length > 500) return Response.json({error:'term'},{status:400});

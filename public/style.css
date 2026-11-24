@@ -89,3 +89,5 @@
 .clear-board .ico { width: 15px; height: 15px; }
 .clear-board:hover:enabled { color: #ffc1cf; }
 .clear-board:disabled { opacity: .55; cursor: default; }
+
+.result .store-label { color: #c8bcd7; font-size: 11px; white-space: nowrap; }
