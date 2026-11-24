@@ -224,7 +224,7 @@ $('#clear-board').onclick = () => {
     save();
     search.focus();
   }, 'trash');
-  actions.append(cancel, clear);
+  actions.append(clear, cancel);
   body.append(message, actions);
   cancel.focus();
 };
