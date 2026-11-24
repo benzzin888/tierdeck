@@ -30,7 +30,27 @@ function boardEntry(game, rank) {
   return entry;
 }
 function parseBoard(data){if(!data||typeof data.name!=='string'||!Array.isArray(data.games))throw Error();const ids=new Set();const board=fresh(data.name.trim().slice(0,90)||'Мой тир-лист игр');for(const g of data.games){if(!(storeOf(g.id)||(Number.isSafeInteger(g.id)&&(g.id>0||local.has(g.id))))||ids.has(g.id)||typeof g.name!=='string'||!Number.isInteger(g.rank)||g.rank<0||g.rank>10)continue;ids.add(g.id);board.games.push(boardEntry(g,g.rank))}if(typeof data.id==='string'&&/^[a-f0-9-]{36}$/.test(data.id))board.id=data.id;board.updated=Number(data.updated)||Date.now();return board}
+const apiOrigin = location.hostname.endsWith('.github.io')
+  ? 'https://tierdeck-games.aromaticeagle16.chatgpt.site'
+  : location.origin;
 let board,loadedShared=false,brokenShare=false;
+let shareLoadError='';
+if (location.hash.startsWith('#s=')) {
+  const code=location.hash.slice(3);
+  try {
+    if (!/^[A-Za-z0-9_-]{16}$/.test(code)) throw new Error('missing');
+    const response=await fetch(apiOrigin+'/api/shares/'+code,{signal:AbortSignal.timeout(20000)});
+    if (!response.ok) throw new Error(response.status===404?'missing':'offline');
+    board=parseBoard(await response.json());
+    loadedShared=true;
+    history.replaceState(null,'',location.pathname+location.search);
+  } catch(error) {
+    shareLoadError=error.message==='missing'?'Тир-лист по этой ссылке не найден.':'Не удалось загрузить тир-лист. Обновите страницу, чтобы повторить.';
+  }
+}
+window.addEventListener('hashchange', () => {
+  if (location.hash.startsWith('#s=') || location.hash.startsWith('#list=')) location.reload();
+});
 function from64(str){return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(str.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0))))}
 if(location.hash.startsWith('#list=')){try{board=parseBoard(from64(location.hash.slice(6)));loadedShared=true}catch{brokenShare=true}history.replaceState(null,'',location.pathname+location.search)}
 if(!board){try{board=parseBoard(JSON.parse(localStorage.getItem(prefix+localStorage.getItem(activeKey))))}catch{board=fresh(undefined,true)}}
@@ -39,9 +59,6 @@ function toast(msg){$('#toast').textContent=msg;$('#toast').classList.add('on');
 function save(){board.updated=Date.now();try{localStorage.setItem(prefix+board.id,JSON.stringify(board));localStorage.setItem(activeKey,board.id);$('#status span').textContent='Сохранено'}catch{$('#status span').textContent='Не сохранено';toast('Хранилище браузера недоступно. Сохраните ссылку на список.')}render()}
 function plural(n,one,few,many){return n+' '+(n%10===1&&n%100!==11?one:n%10>=2&&n%10<=4&&(n%100<12||n%100>14)?few:many)}
 function gamesCount(n){return plural(n,'игра','игры','игр')}
-const apiOrigin = location.hostname.endsWith('.github.io')
-  ? 'https://tierdeck-games.aromaticeagle16.chatgpt.site'
-  : location.origin;
 const remoteCovers = new Map();
 function urls(id, game) {
   const localGame = local.get(id);
@@ -292,8 +309,48 @@ $('#clear-board').onclick = () => {
   body.append(message, actions);
   cancel.focus();
 };
-$('#share').onclick=()=>{const bytes=new TextEncoder().encode(JSON.stringify({name:board.name,games:board.games}));let s='';for(const byte of bytes)s+=String.fromCharCode(byte);const link=location.origin+location.pathname+'#list='+btoa(s).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');show('Поделиться тир-листом');body.append(el('p','muted','По ссылке откроется копия текущего списка с вашими оценками.'));const field=el('input','field');field.readOnly=true;field.value=link;field.setAttribute('aria-label','Ссылка на тир-лист');field.onclick=()=>field.select();const actions=el('div','modalbtns');actions.append(btn('Скопировать ссылку','primary',async()=>{try{await navigator.clipboard.writeText(link);toast('Ссылка скопирована');modal.close()}catch{field.focus();field.select();if(document.execCommand('copy')){toast('Ссылка скопирована');modal.close()}else toast('Скопируйте выделенную ссылку')}},'link'));body.append(field,actions)};
+async function shareBoard() {
+  show('Поделиться тир-листом');
+  const status = el('p','muted','Создаём короткую ссылку…');
+  body.append(status);
+  try {
+    const response = await fetch(apiOrigin+'/api/shares',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({name:board.name,games:board.games}), signal:AbortSignal.timeout(20000)
+    });
+    if (!response.ok) throw new Error();
+    const {code} = await response.json();
+    if (!/^[A-Za-z0-9_-]{16}$/.test(code)) throw new Error();
+    if (!status.isConnected || !modal.open) return;
+    const link = location.origin+location.pathname+'#s='+code;
+    status.textContent = 'По ссылке откроется копия текущего списка с вашими оценками.';
+    const field = el('input','field');
+    field.readOnly = true;
+    field.value = link;
+    field.setAttribute('aria-label','Ссылка на тир-лист');
+    field.onclick = () => field.select();
+    const actions = el('div','modalbtns');
+    actions.append(btn('Скопировать ссылку','primary',async () => {
+      try { await navigator.clipboard.writeText(link); }
+      catch {
+        field.focus();
+        field.select();
+        if (!document.execCommand('copy')) { toast('Скопируйте выделенную ссылку'); return; }
+      }
+      modal.close();
+      toast('Ссылка скопирована');
+    },'link'));
+    body.append(field,actions);
+  } catch {
+    if (!status.isConnected || !modal.open) return;
+    status.textContent = 'Не удалось создать ссылку. Попробуйте ещё раз.';
+    body.append(btn('Повторить','softbtn',shareBoard));
+  }
+}
+$('#share').onclick=shareBoard;
+
 save();
 if (document.activeElement === search && search.value.trim()) startSearch();
+if(shareLoadError){show('Не удалось открыть ссылку');body.append(el('p','muted',shareLoadError));}
 if(loadedShared)toast('Копия тир-листа сохранена в этом браузере');if(brokenShare)toast('Не удалось прочитать ссылку на тир-лист');
 $('#png').onclick=async()=>{const b=$('#png'),original=b.innerHTML;b.disabled=true;b.textContent='Создаём PNG…';const snap=structuredClone(board);try{const {downloadBoard}=await import('./export.js?v=multistore1');const missing=await downloadBoard(snap,colors,labels,urls);toast(missing?'PNG готов. Для недоступных обложек указаны названия.':'PNG готов к скачиванию')}catch{toast('Не удалось создать PNG. Попробуйте ещё раз.')}finally{b.disabled=false;b.innerHTML=original}};
