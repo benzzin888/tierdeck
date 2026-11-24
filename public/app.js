@@ -142,10 +142,15 @@ function suggest(){
   const previous=picked?hits[selection]?.id:null;
   const ranked=[];
   for(const g of index){const score=localWeight(g,q);if(Number.isFinite(score))ranked.push({g,score})}
-  [...games, ...current.consoleGames].forEach((g,i,all)=>{
-    const score=localWeight(g,q);
-    ranked.push({g,score:score===0?0:1 + i / (all.length + 1)});
-  });
+  const positions = new Map();
+  for (const g of [...games, ...current.consoleGames]) {
+    const store = storeOf(g.id) || 'Steam';
+    const position = positions.get(store) || 0;
+    positions.set(store, position + 1);
+    const match = localWeight(g,q);
+    const score = Number.isFinite(match) ? match : 8;
+    ranked.push({g, score:score + position / 1000});
+  }
   ranked.sort((a,b)=>a.score-b.score||Number(!!b.g.featured)-Number(!!a.g.featured)||a.g.name.length-b.g.name.length||String(a.g.id).localeCompare(String(b.g.id)));
   const seen=new Set();hits=[];let hiddenMatches=false;
   for(const {g} of ranked){if(seen.has(g.id))continue;if(hits.length===current.limit){hiddenMatches=true;break}seen.add(g.id);hits.push(g)}

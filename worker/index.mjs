@@ -188,7 +188,7 @@ async function playStationCover(url) {
   const image = psImage(url.searchParams.get('src'));
   if (!image) return new Response(null, {status:400});
   image.search = 'w=720';
-  const response = await fetch(image, {redirect:'error', signal:AbortSignal.timeout(7000), cf:{cacheEverything:true,cacheTtl:86400}});
+  const response = await fetch(image.href, {redirect:'manual', signal:AbortSignal.timeout(7000), cf:{cacheEverything:true,cacheTtl:86400}});
   const type = response.headers.get('Content-Type') || '';
   if (!response.ok || !/^image\/(?:jpeg|png|webp|avif)(?:;|$)/i.test(type)) return new Response(null,{status:404});
   return new Response(response.body, {headers:{'Content-Type':type,'Cache-Control':'public,max-age=86400'}});
