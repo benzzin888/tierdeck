@@ -104,12 +104,97 @@ function cardId(card) {
   const id = card?.dataset.id;
   return storeOf(id) ? id : Number(id);
 }
-let dragId=null;
-document.addEventListener('dragstart',e=>{const c=e.target.closest('[data-id]');if(!c)return;dragId=cardId(c);e.dataTransfer.setData('text/plain',c.dataset.id);e.dataTransfer.effectAllowed='move';c.classList.add('dragging')});
-function clearDrag(){document.querySelectorAll('.dragover,.dragging,.focusdrop').forEach(n=>n.classList.remove('dragover','dragging','focusdrop'));dragId=null}
-document.addEventListener('dragover',e=>{const zone=e.target.closest('[data-zone]');if(!zone||dragId===null)return;e.preventDefault();e.dataTransfer.dropEffect='move';document.querySelectorAll('.dragover,.focusdrop').forEach(n=>n.classList.remove('dragover','focusdrop'));zone.classList.add('dragover');const c=e.target.closest('[data-id]');if(c&&cardId(c)!==dragId)c.classList.add('focusdrop')});
-document.addEventListener('dragleave',e=>{const z=e.target.closest('[data-zone]');if(z&&!z.contains(e.relatedTarget))z.classList.remove('dragover')});document.addEventListener('dragend',clearDrag);
-document.addEventListener('drop',e=>{const z=e.target.closest('[data-zone]');if(!z||dragId===null)return;e.preventDefault();move(dragId,+z.dataset.zone,cardId(e.target.closest('[data-id]')));clearDrag()});
+let dragId = null;
+let preview = null;
+const insertLine = el('span', 'insert-line');
+insertLine.setAttribute('aria-hidden', 'true');
+
+function insertionSlot(zone, x, y) {
+  const cards = Array.from(zone.querySelectorAll('[data-id]'));
+  if (!cards.length) {
+    const area = zone.querySelector('.rowbody, .pool-empty').getBoundingClientRect();
+    return {before:null, x:area.left + 6, y:area.top + 6, height:area.height - 12};
+  }
+
+  // Pick the visual row first. At a wrap, even a large horizontal gap
+  // belongs to this row, not to the last card in the entire rank.
+  let nearest = null;
+  let bestY = Infinity;
+  let bestX = Infinity;
+  for (const [index, card] of cards.entries()) {
+    const rect = card.getBoundingClientRect();
+    const dy = Math.abs(y - (rect.top + rect.height / 2));
+    const dx = Math.abs(x - (rect.left + rect.width / 2));
+    if (dy < bestY || (dy === bestY && dx < bestX)) {
+      nearest = {index, rect};
+      bestY = dy;
+      bestX = dx;
+    }
+  }
+
+  const {index, rect} = nearest;
+  const after = x >= rect.left + rect.width / 2;
+  const next = cards[index + Number(after)];
+  return {
+    before:next ? cardId(next) : null,
+    x:after ? rect.right + 4 : rect.left - 4,
+    y:rect.top,
+    height:rect.height
+  };
+}
+
+function hideInsertion() {
+  preview?.zone.classList.remove('dragover');
+  insertLine.remove();
+  preview = null;
+}
+function clearDrag() {
+  hideInsertion();
+  document.querySelector('.dragging')?.classList.remove('dragging');
+  dragId = null;
+}
+
+document.addEventListener('dragstart', e => {
+  const card = e.target.closest('[data-id]');
+  if (!card) return;
+  dragId = cardId(card);
+  e.dataTransfer.setData('text/plain', card.dataset.id);
+  e.dataTransfer.effectAllowed = 'move';
+  card.classList.add('dragging');
+});
+
+document.addEventListener('dragover', e => {
+  if (dragId === null) return;
+  const zone = e.target.closest('[data-zone]');
+  if (!zone) { hideInsertion(); return; }
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const slot = insertionSlot(zone, e.clientX, e.clientY);
+  if (zone !== preview?.zone) {
+    hideInsertion();
+    zone.classList.add('dragover');
+    zone.append(insertLine);
+  }
+  const bounds = zone.getBoundingClientRect();
+  insertLine.style.left = (slot.x - bounds.left - zone.clientLeft) + 'px';
+  insertLine.style.top = (slot.y - bounds.top - zone.clientTop) + 'px';
+  insertLine.style.height = slot.height + 'px';
+  preview = {zone, before:slot.before};
+});
+
+document.addEventListener('dragleave', e => {
+  if (preview?.zone === e.target.closest('[data-zone]') && !preview.zone.contains(e.relatedTarget)) hideInsertion();
+});
+document.addEventListener('dragend', clearDrag);
+document.addEventListener('drop', e => {
+  const zone = e.target.closest('[data-zone]');
+  if (dragId === null || !zone) return;
+  e.preventDefault();
+  const slot = preview?.zone === zone ? preview : insertionSlot(zone, e.clientX, e.clientY);
+  const id = dragId;
+  clearDrag();
+  move(id, Number(zone.dataset.zone), slot.before);
+});
 const normalize = s => s.normalize('NFKD').toLowerCase()
   .replace(/[\u0300-\u036f’'™®]/g,'').replace(/[^\p{L}\p{N}]+/gu,' ').trim();
 const aliases = {
