@@ -67,3 +67,25 @@
   .heroart { position: relative; inset: auto; order: 1; z-index: auto; height: clamp(94px,23vw,142px); margin-inline: -18px; }
   .occupied .rowbody { padding: 6px 8px 8px; }
 }
+
+.rank-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  flex-wrap: wrap;
+  margin-top: 5px;
+}
+.rank-tools p { margin: 0; }
+.clear-board {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  background: transparent;
+  color: #b9afc7;
+  font-size: 13px;
+}
+.clear-board .ico { width: 15px; height: 15px; }
+.clear-board:hover:enabled { color: #ffc1cf; }
+.clear-board:disabled { opacity: .55; cursor: default; }

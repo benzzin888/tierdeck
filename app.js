@@ -39,7 +39,9 @@ $('#close').onclick=()=>modal.close();modal.onclick=e=>{if(e.target===modal){con
 function move(id,rank,before){const idx=board.games.findIndex(g=>g.id===id);if(idx<0||id===before)return;const [g]=board.games.splice(idx,1);g.rank=rank;const dest=board.games.findIndex(g=>g.id===before);board.games.splice(dest<0?board.games.length:dest,0,g);save()}
 function gameMenu(g){show('Оценка игры');const title=el('div','movetitle');title.append(cover(g,'inlineposter'));const info=el('div');info.append(el('strong','',g.name),el('p','muted','Выберите оценку от 10 до 1.'));title.append(info);const grid=el('div','scoreselect');for(let r=10;r>=1;r--){const b=btn(r,'',()=>{move(g.id,r);modal.close()});b.style.background=colors[r-1];b.setAttribute('aria-pressed',r===g.rank);grid.append(b)}const actions=el('div','modalbtns');if(g.rank)actions.append(btn('Вернуть на полку','softbtn',()=>{move(g.id,0);modal.close()},'library'));actions.append(btn('Убрать из списка','danger',()=>{board.games=board.games.filter(x=>x.id!==g.id);save();modal.close();toast('Игра убрана из списка')},'trash'));body.append(title,grid,actions)}
 function card(g,small){const b=btn('',small?'rankcard':'game',()=>gameMenu(g));b.setAttribute('aria-label',g.name+' — выбрать оценку');b.title=g.name;b.draggable=true;b.dataset.id=g.id;if(small)b.append(cover(g));else{const p=el('span','poster');p.append(cover(g));b.append(p,el('span','game-name',g.name))}return b}
-function render(){document.title=board.name+' · Tierdeck';$('#boardname').textContent=board.name;const pool=board.games.filter(g=>!g.rank);$('#rankcount').textContent='Оценено '+(board.games.length-pool.length)+' / '+board.games.length;$('#poolcount').textContent=gamesCount(pool.length);$('#pool').replaceChildren(...pool.map(g=>card(g,false)));if(!pool.length)$('#pool').append(el('div','pool-empty','Найдите игру в поиске или верните обложку со шкалы.'));$('#ranks').replaceChildren();
+function render(){
+ $('#clear-board').disabled = board.games.length === 0;
+ document.title=board.name+' · Tierdeck';$('#boardname').textContent=board.name;const pool=board.games.filter(g=>!g.rank);$('#rankcount').textContent='Оценено '+(board.games.length-pool.length)+' / '+board.games.length;$('#poolcount').textContent=gamesCount(pool.length);$('#pool').replaceChildren(...pool.map(g=>card(g,false)));if(!pool.length)$('#pool').append(el('div','pool-empty','Найдите игру в поиске или верните обложку со шкалы.'));$('#ranks').replaceChildren();
  for(let r=10;r>0;r--){const row=el('div','rank');row.dataset.zone=r;row.setAttribute('aria-label','Оценка '+r);row.style.setProperty('--tone',colors[r-1]);const name=el('div','ranklabel',r);const area=el('div','rowbody'),games=board.games.filter(g=>g.rank===r);area.append(el('span','rankword',labels[r-1]));
  if (games.length) {
    row.classList.add('occupied');
@@ -209,6 +211,23 @@ $('#rename').onclick=()=>nameForm(false);$('#editor').onclick=()=>{modal.close()
 function boards(){const all=[];try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k.startsWith(prefix))try{all.push(parseBoard(JSON.parse(localStorage.getItem(k))))}catch{}}}catch{}return all.sort((a,b)=>b.updated-a.updated)}
 function listDialog(){show('Мои тир-листы');body.append(el('p','muted','Списки автоматически сохраняются в этом браузере.'));for(const item of boards()){const row=el('div','listitem');const open=btn('','listopen',()=>{board=item;save();modal.close()});open.append(el('strong','',item.name),el('small','',gamesCount(item.games.length)+(board.id===item.id?' · открыт':'')));const del=btn('','iconbtn',()=>{show('Удалить тир-лист?');body.append(el('p','muted',item.name));const actions=el('div','modalbtns');actions.append(btn('Отмена','softbtn',listDialog),btn('Удалить','danger',()=>{localStorage.removeItem(prefix+item.id);if(board.id===item.id){board=boards()[0]||fresh();save()}listDialog()}));body.append(actions)},'trash');del.setAttribute('aria-label','Удалить '+item.name);row.append(open,del);body.append(row)}const actions=el('div','modalbtns');actions.append(btn('Новый тир-лист','primary',()=>nameForm(true),'plus'));body.append(actions)}
 $('#lists').onclick=listDialog;
+$('#clear-board').onclick = () => {
+  show('Очистить тир-лист?');
+  const message = el('p', 'muted', 'Все игры исчезнут со шкалы оценок и с полки в списке «' + board.name + '».');
+  const actions = el('div', 'modalbtns');
+  const cancel = btn('Отмена', 'softbtn', () => modal.close());
+  const clear = btn('Очистить', 'danger', () => {
+    board.games = [];
+    search.value = '';
+    hideResults();
+    modal.close();
+    save();
+    search.focus();
+  }, 'trash');
+  actions.append(cancel, clear);
+  body.append(message, actions);
+  cancel.focus();
+};
 $('#share').onclick=()=>{const bytes=new TextEncoder().encode(JSON.stringify({name:board.name,games:board.games}));let s='';for(const byte of bytes)s+=String.fromCharCode(byte);const link=location.origin+location.pathname+'#list='+btoa(s).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');show('Поделиться тир-листом');body.append(el('p','muted','По ссылке откроется копия текущего списка с вашими оценками.'));const field=el('input','field');field.readOnly=true;field.value=link;field.setAttribute('aria-label','Ссылка на тир-лист');field.onclick=()=>field.select();const actions=el('div','modalbtns');actions.append(btn('Скопировать ссылку','primary',async()=>{try{await navigator.clipboard.writeText(link);toast('Ссылка скопирована');modal.close()}catch{field.focus();field.select();if(document.execCommand('copy')){toast('Ссылка скопирована');modal.close()}else toast('Скопируйте выделенную ссылку')}},'link'));body.append(field,actions)};
 save();
 if (document.activeElement === search && search.value.trim()) startSearch();
